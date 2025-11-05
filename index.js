@@ -1,106 +1,102 @@
-const { Client, GatewayIntentBits } = require('discord.js');
-require('dotenv').config();
+// index.js
+import { Client, GatewayIntentBits } from "discord.js";
+import dotenv from "dotenv";
+import express from "express";
+
+dotenv.config();
+
+const TOKEN = process.env.TOKEN;
+const CHANNEL_NAME = process.env.CHANNEL_NAME || "resp-boss";
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-let bosses = {};
+const app = express();
+const PORT = process.env.PORT || 8000;
+app.get("/", (req, res) => res.send("Bot is alive!"));
+app.listen(PORT, () => console.log(`🌐 HTTP server running on port ${PORT}`));
 
-client.once('ready', () => {
+let bosses = [];
+
+client.on("clientReady", () => {
   console.log(`✅ Zalogowano jako ${client.user.tag}`);
-  client.user.setActivity('Boss Timer ⏳');
 });
 
-// Pomocnicza funkcja do przeliczenia formatu +1h26m na milisekundy
-function parseTime(str) {
-  const match = str.match(/\+?((\d+)h)?((\d+)m)?/i);
-  if (!match) return null;
-
-  const hours = match[2] ? parseInt(match[2]) : 0;
-  const minutes = match[4] ? parseInt(match[4]) : 0;
-
-  return (hours * 60 + minutes) * 60 * 1000;
-}
-
-// Co minutę sprawdzaj, czy boss się zaraz pojawi
-setInterval(() => {
-  const now = Date.now();
-  for (const [name, boss] of Object.entries(bosses)) {
-    const diff = boss.time - now;
-
-    // Przypomnienie 15 minut wcześniej
-    if (!boss.reminded && diff <= 15 * 60 * 1000 && diff > 14 * 60 * 1000) {
-      boss.channel.send(`⚠️ **${name.toUpperCase()}** na mapie **${boss.map}** pojawi się za **15 minut!**`);
-      boss.reminded = true;
-    }
-
-    // Usunięcie po pojawieniu
-    if (diff <= 0) {
-      boss.channel.send(`🔥 **${name.toUpperCase()}** pojawił się na mapie **${boss.map}**!`);
-      delete bosses[name];
-    }
-  }
-}, 60 * 1000);
-
-// Obsługa komend
-client.on('messageCreate', (message) => {
+client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
+  if (!message.content.startsWith("!")) return;
 
-  const args = message.content.trim().split(/ +/);
+  const args = message.content.slice(1).trim().split(/ +/);
   const command = args.shift().toLowerCase();
 
-  // !boss [nazwa] [mapa] [+1h26m]
-  if (command === '!boss') {
-    if (args.length < 3) return message.reply('⚠️ Użycie: `!boss [nazwa] [mapa] [+1h26m / +30m / +2h]`');
-    const [name, map, timeStr] = args;
-    const ms = parseTime(timeStr);
-
-    if (!ms) return message.reply('⚠️ Niepoprawny format czasu! Użyj np. `+1h30m`, `+45m`, `+2h`.');
-
-    const respTime = Date.now() + ms;
-    bosses[name.toLowerCase()] = { time: respTime, map, reminded: false, channel: message.channel };
-
-    message.channel.send(`✅ Ustawiono timer: **${name}** (${map}) za **${timeStr.replace('+','')}**.`);
+  const channel = message.guild.channels.cache.find((ch) => ch.name === CHANNEL_NAME);
+  if (!channel) {
+    return message.reply(`❌ Nie znaleziono kanału #${CHANNEL_NAME}`);
   }
 
-  // !delboss [nazwa]
-  else if (command === '!delboss') {
-    if (args.length < 1) return message.reply('⚠️ Użycie: `!delboss [nazwa]`');
-    const name = args[0].toLowerCase();
+  if (command === "boss") {
+    const [name, map, timeArg] = args;
+    if (!name || !map || !timeArg)
+      return message.reply("❌ Użycie: `!boss <nazwa> <mapa> +1h20m`");
 
-    if (bosses[name]) {
-      delete bosses[name];
-      message.reply(`🗑️ Timer dla **${name}** został usunięty.`);
-    } else {
-      message.reply(`❌ Nie znaleziono timera dla **${name}**.`);
-    }
+    const match = timeArg.match(/\+?((\d+)h)?((\d+)m)?/);
+    if (!match) return message.reply("❌ Niepoprawny format czasu, np. +1h30m");
+
+    const hours = parseInt(match[2] || 0);
+    const minutes = parseInt(match[4] || 0);
+    const totalMs = (hours * 60 + minutes) * 60 * 1000;
+    const respTime = Date.now() + totalMs;
+
+    const boss = { name, map, respTime };
+    bosses.push(boss);
+
+    channel.send(`✅ **${name}** (${map}) respawn za ${hours}h ${minutes}m`);
+    scheduleReminder(boss, channel);
   }
 
-  // !timer — lista wszystkich bossów
-  else if (command === '!timer') {
-    if (Object.keys(bosses).length === 0) return message.reply('📭 Brak aktywnych timerów.');
-
-    let reply = '📜 **Aktywne timery bossów:**\n';
-    for (const [name, boss] of Object.entries(bosses)) {
-      const remaining = Math.max(0, boss.time - Date.now());
-      const h = Math.floor(remaining / 3600000);
-      const m = Math.ceil((remaining % 3600000) / 60000);
-      reply += `🕒 ${name} (${boss.map}) — ${h}h ${m}m\n`;
-    }
-
-    message.channel.send(reply);
+  if (command === "timer") {
+    if (bosses.length === 0) return channel.send("⏳ Brak aktywnych bossów.");
+    const list = bosses
+      .map((b) => {
+        const remaining = b.respTime - Date.now();
+        const min = Math.max(0, Math.floor(remaining / 60000));
+        return `🕒 **${b.name}** (${b.map}) - za ${Math.floor(min / 60)}h ${min % 60}m`;
+      })
+      .join("\n");
+    channel.send(list);
   }
 
-  // !timerclean — usuwa wszystkie timery
-  else if (command === '!timerclean') {
-    bosses = {};
-    message.reply('🧹 Wszystkie timery zostały usunięte.');
+  if (command === "delboss") {
+    const name = args[0];
+    if (!name) return message.reply("❌ Użycie: `!delboss <nazwa>`");
+    const before = bosses.length;
+    bosses = bosses.filter((b) => b.name.toLowerCase() !== name.toLowerCase());
+    if (bosses.length === before) return message.reply("❌ Nie znaleziono takiego bossa.");
+    channel.send(`🗑️ Usunięto bossa **${name}**`);
+  }
+
+  if (command === "timerclean") {
+    bosses = [];
+    channel.send("🧹 Wszystkie timery wyczyszczone.");
   }
 });
 
-client.login(process.env.TOKEN);
+function scheduleReminder(boss, channel) {
+  const reminderTime = boss.respTime - 15 * 60 * 1000;
+  const delay = reminderTime - Date.now();
+
+  if (delay > 0) {
+    setTimeout(() => {
+      channel.send(`⚠️ **${boss.name}** (${boss.map}) respawn za 15 minut!`);
+    }, delay);
+  }
+
+  const totalDelay = boss.respTime - Date.now();
+  setTimeout(() => {
+    channel.send(`🔥 **${boss.name}** (${boss.map}) właśnie się pojawił!`);
+    bosses = bosses.filter((b) => b.name !== boss.name);
+  }, totalDelay);
+}
+
+client.login(TOKEN);
