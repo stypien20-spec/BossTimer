@@ -1,23 +1,32 @@
-// index.js
 import { Client, GatewayIntentBits } from "discord.js";
 import dotenv from "dotenv";
 import express from "express";
 
 dotenv.config();
+const app = express();
+app.get("/", (req, res) => res.send("Bot działa i jest online!"));
+app.listen(8000, () => console.log("🌐 Serwer Express uruchomiony na porcie 8000"));
 
-const TOKEN = process.env.TOKEN;
-const CHANNEL_NAME = process.env.CHANNEL_NAME || "resp-boss";
-
+// Discord konfiguracja
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-const app = express();
-const PORT = process.env.PORT || 8000;
-app.get("/", (req, res) => res.send("Bot is alive!"));
-app.listen(PORT, () => console.log(`🌐 HTTP server running on port ${PORT}`));
+const TOKEN = process.env.TOKEN;
+const CHANNEL_NAME = process.env.CHANNEL_NAME || "resp-boss";
 
-let bosses = [];
+const bossTimers = new Map();
+
+// funkcja do wysyłania przypomnień
+function scheduleReminder(bossName, map, time) {
+  const diff = time - Date.now();
+  if (diff > 15 * 60 * 1000) {
+    setTimeout(() => {
+      const channel = client.channels.cache.find(c => c.name === CHANNEL_NAME);
+      if (channel) channel.send(`⏰ **${bossName}** na mapie **${map}** pojawi się za 15 minut!`);
+    }, diff - 15 * 60 * 1000);
+  }
+}
 
 client.on("clientReady", () => {
   console.log(`✅ Zalogowano jako ${client.user.tag}`);
@@ -25,78 +34,62 @@ client.on("clientReady", () => {
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-  if (!message.content.startsWith("!")) return;
 
-  const args = message.content.slice(1).trim().split(/ +/);
-  const command = args.shift().toLowerCase();
+  const args = message.content.trim().split(/\s+/);
+  const command = args.shift()?.toLowerCase();
 
-  const channel = message.guild.channels.cache.find((ch) => ch.name === CHANNEL_NAME);
-  if (!channel) {
-    return message.reply(`❌ Nie znaleziono kanału #${CHANNEL_NAME}`);
+  if (command === "!boss") {
+    const [name, map, czas] = args;
+    if (!name || !map || !czas) {
+      return message.reply("Użycie: `!boss <nazwa> <mapa> <+czas>` np. `!boss Kundun Aida +1h30m`");
+    }
+
+    const match = czas.match(/\+?(?:(\d+)h)?(?:(\d+)m)?/);
+    if (!match) return message.reply("Niepoprawny format czasu! Użyj np. `+1h30m`, `+40m` lub `+2h`");
+
+    const hours = parseInt(match[1] || 0);
+    const minutes = parseInt(match[2] || 0);
+    const respTime = Date.now() + (hours * 60 + minutes) * 60 * 1000;
+
+    bossTimers.set(name.toLowerCase(), { name, map, respTime });
+    scheduleReminder(name, map, respTime);
+
+    const date = new Date(respTime).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+    message.channel.send(`✅ Dodano bossa **${name}** (${map}) — resp o **${date}**.`);
   }
 
-  if (command === "boss") {
-    const [name, map, timeArg] = args;
-    if (!name || !map || !timeArg)
-      return message.reply("❌ Użycie: `!boss <nazwa> <mapa> +1h20m`");
+  else if (command === "!delboss") {
+    const name = args[0];
+    if (!name) return message.reply("Użycie: `!delboss <nazwa>`");
 
-    const match = timeArg.match(/\+?((\d+)h)?((\d+)m)?/);
-    if (!match) return message.reply("❌ Niepoprawny format czasu, np. +1h30m");
-
-    const hours = parseInt(match[2] || 0);
-    const minutes = parseInt(match[4] || 0);
-    const totalMs = (hours * 60 + minutes) * 60 * 1000;
-    const respTime = Date.now() + totalMs;
-
-    const boss = { name, map, respTime };
-    bosses.push(boss);
-
-    channel.send(`✅ **${name}** (${map}) respawn za ${hours}h ${minutes}m`);
-    scheduleReminder(boss, channel);
+    if (bossTimers.delete(name.toLowerCase())) {
+      message.reply(`❌ Boss **${name}** został usunięty z listy.`);
+    } else {
+      message.reply(`Nie znaleziono bossa o nazwie **${name}**.`);
+    }
   }
 
-  if (command === "timer") {
-    if (bosses.length === 0) return channel.send("⏳ Brak aktywnych bossów.");
-    const list = bosses
-      .map((b) => {
-        const remaining = b.respTime - Date.now();
-        const min = Math.max(0, Math.floor(remaining / 60000));
-        return `🕒 **${b.name}** (${b.map}) - za ${Math.floor(min / 60)}h ${min % 60}m`;
+  else if (command === "!timer") {
+    if (bossTimers.size === 0) return message.reply("Brak aktywnych timerów bossów.");
+
+    const list = [...bossTimers.values()]
+      .map(b => {
+        const timeLeft = Math.max(0, b.respTime - Date.now());
+        const min = Math.floor(timeLeft / 60000);
+        const hr = Math.floor(min / 60);
+        const left = hr > 0 ? `${hr}h ${min % 60}m` : `${min}m`;
+        const date = new Date(b.respTime).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+        return `🕐 **${b.name}** (${b.map}) — resp za ${left} (${date})`;
       })
       .join("\n");
-    channel.send(list);
+
+    message.channel.send(`📜 **Aktywne timery:**\n${list}`);
   }
 
-  if (command === "delboss") {
-    const name = args[0];
-    if (!name) return message.reply("❌ Użycie: `!delboss <nazwa>`");
-    const before = bosses.length;
-    bosses = bosses.filter((b) => b.name.toLowerCase() !== name.toLowerCase());
-    if (bosses.length === before) return message.reply("❌ Nie znaleziono takiego bossa.");
-    channel.send(`🗑️ Usunięto bossa **${name}**`);
-  }
-
-  if (command === "timerclean") {
-    bosses = [];
-    channel.send("🧹 Wszystkie timery wyczyszczone.");
+  else if (command === "!timerclean") {
+    bossTimers.clear();
+    message.reply("🧹 Wszystkie timery bossów zostały wyczyszczone.");
   }
 });
-
-function scheduleReminder(boss, channel) {
-  const reminderTime = boss.respTime - 15 * 60 * 1000;
-  const delay = reminderTime - Date.now();
-
-  if (delay > 0) {
-    setTimeout(() => {
-      channel.send(`⚠️ **${boss.name}** (${boss.map}) respawn za 15 minut!`);
-    }, delay);
-  }
-
-  const totalDelay = boss.respTime - Date.now();
-  setTimeout(() => {
-    channel.send(`🔥 **${boss.name}** (${boss.map}) właśnie się pojawił!`);
-    bosses = bosses.filter((b) => b.name !== boss.name);
-  }, totalDelay);
-}
 
 client.login(TOKEN);
