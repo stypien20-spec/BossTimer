@@ -7,7 +7,7 @@ import cron from 'node-cron';
 
 dotenv.config();
 
-// ESM fix dla __dirname
+// Fix dla __dirname w ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -20,9 +20,10 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
 });
 
-// Tworzymy folder backups jeśli go nie ma
+// Utwórz folder backups, jeśli nie istnieje
 if (!fs.existsSync(BACKUP_DIR)) {
   fs.mkdirSync(BACKUP_DIR);
+  console.log('[BACKUP] Utworzono folder backups/');
 }
 
 // === FUNKCJA TWORZĄCA BACKUP ===
@@ -31,11 +32,11 @@ async function createBackup() {
   const backupFile = path.join(BACKUP_DIR, `timers_backup_${timestamp}.json`);
 
   try {
-    // Skopiuj timers.json
+    // Skopiuj timers.json do backups
     fs.copyFileSync(TIMERS_FILE, backupFile);
     console.log(`[BACKUP] Utworzono kopię: ${backupFile}`);
 
-    // Usuń stare kopie
+    // Usuń stare kopie — zostaw tylko 2 najnowsze
     const files = fs.readdirSync(BACKUP_DIR)
       .filter(f => f.startsWith('timers_backup_'))
       .sort((a, b) => fs.statSync(path.join(BACKUP_DIR, b)).mtime - fs.statSync(path.join(BACKUP_DIR, a)).mtime);
@@ -48,8 +49,8 @@ async function createBackup() {
       }
     }
 
-    // Wyślij info i plik na Discorda
-    await sendBackupMessage(timestamp, backupFile);
+    // Wyślij backup i wiadomość na Discorda
+    await sendBackupMessage(backupFile);
 
   } catch (err) {
     console.error('[BACKUP ERROR]', err);
@@ -57,39 +58,39 @@ async function createBackup() {
 }
 
 // === WYSYŁANIE WIADOMOŚCI NA DISCORD ===
-async function sendBackupMessage(timestamp, backupPath) {
+async function sendBackupMessage(backupPath) {
   try {
-    // Poczekaj aż bot będzie gotowy
     if (!client.isReady()) return;
 
     const guilds = client.guilds.cache;
 
-    for (const [guildId, guild] of guilds) {
+    for (const [_, guild] of guilds) {
       const logsChannel = guild.channels.cache.find(ch => ch.name === 'logs');
       const infoChannel = guild.channels.cache.find(ch => ch.name === 'guild-chat');
-
       const attachment = new AttachmentBuilder(backupPath);
 
+      // Wyślij plik backupu na kanał logs
       if (logsChannel) {
         await logsChannel.send({
-          content: `💾 Nowy backup timers.json (${timestamp})`,
+          content: `💾 Nowy backup timers.json`,
           files: [attachment]
         });
       }
 
+      // Krótkie info na kanał guild-chat
       if (infoChannel) {
-        await infoChannel.send(`✅ Backup timers.json został pomyślnie utworzony o **${timestamp}**`);
+        await infoChannel.send('💾 Backup został wykonany pomyślnie ✅');
       }
     }
 
-  } catch (e) {
-    console.error('[DISCORD BACKUP MESSAGE ERROR]', e);
+  } catch (err) {
+    console.error('[DISCORD BACKUP MESSAGE ERROR]', err);
   }
 }
 
-// === CRON: automatyczny backup 2x dziennie ===
-// 0 0,12 * * * -> północ i południe
-cron.schedule('0 0,12 * * *', () => {
+// === CRON: automatyczny backup co 12 godzin ===
+// 0 */12 * * * -> co 12 godzin (00:00, 12:00)
+cron.schedule('0 */12 * * *', () => {
   console.log('[CRON] Uruchamiam automatyczny backup...');
   createBackup();
 });
