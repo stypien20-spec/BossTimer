@@ -20,6 +20,10 @@ const GUILD_CHANNEL = "skarbowka-pierogow"; // 💰 przypomnienia do wpłaty
 
 // --- Plik danych ---
 const DATA_FILE = "./data.json";
+if (!fs.existsSync(DATA_FILE)) {
+  console.warn("[INIT] Nie znaleziono data.json — tworzę pusty plik...");
+  fs.writeFileSync(DATA_FILE, JSON.stringify({ bosses: [], events: {} }, null, 2), "utf8");
+}
 let data = { bosses: [], events: {} };
 
 function loadData() {
@@ -146,7 +150,6 @@ async function checkLoop() {
   save();
 
   // Eventy
-  const dateKey = now.toISOString().slice(0, 10);
   for (const [ename, times] of Object.entries(data.events)) {
     for (const t of times) {
       const normalized = normalizeTimeString(t);
@@ -257,7 +260,6 @@ cron.schedule("0 9,21 * * 0,1", async () => {
 // --- Połączenie z Discordem ---
 client.once("ready", async () => {
   console.log(`[BOT] Połączono jako ${client.user.tag}`);
-  // Przywróć dane z backupu
   const { restoreLatestBackup } = await import("./backup.js");
   await restoreLatestBackup();
   console.log("[BACKUP] Przywrócono dane (jeśli wymagane)");
