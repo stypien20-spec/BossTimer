@@ -12,7 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const BACKUP_DIR = path.join(__dirname, 'backups');
-const DATA_FILE = path.join(__dirname, 'data.json'); // <- poprawka!
+const DATA_FILE = path.join(__dirname, 'data.json');
 const MAX_BACKUPS = 2;
 
 // Inicjalizacja bota Discord
@@ -32,6 +32,12 @@ async function createBackup() {
   const backupFile = path.join(BACKUP_DIR, `data_backup_${timestamp}.json`);
 
   try {
+    // Sprawdź, czy data.json istnieje
+    if (!fs.existsSync(DATA_FILE)) {
+      console.error(`[BACKUP ERROR] Plik ${DATA_FILE} nie istnieje — pomijam backup.`);
+      return;
+    }
+
     // Skopiuj data.json do backups
     fs.copyFileSync(DATA_FILE, backupFile);
     console.log(`[BACKUP] Utworzono kopię: ${backupFile}`);
@@ -67,6 +73,7 @@ async function sendBackupMessage(backupPath) {
       const infoChannel = guild.channels.cache.find(ch => ch.name === 'guild-chat');
       const attachment = new AttachmentBuilder(backupPath);
 
+      // Kanał logs — tylko plik
       if (logsChannel) {
         await logsChannel.send({
           content: '💾 Nowy backup data.json',
@@ -74,6 +81,7 @@ async function sendBackupMessage(backupPath) {
         });
       }
 
+      // Kanał guild-chat — tylko komunikat
       if (infoChannel) {
         await infoChannel.send('💾 Backup został wykonany pomyślnie ✅');
       }
@@ -91,7 +99,7 @@ cron.schedule('0 */12 * * *', () => {
 });
 
 // === Pierwszy backup po starcie ===
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log('[BOT] Połączono, uruchamiam automatyczne backupy...');
   createBackup();
 });
