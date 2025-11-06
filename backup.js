@@ -1,11 +1,14 @@
+// ✅ backup.js — automatyczne backupy + przywracanie + przypomnienia o Guild Valut
+
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { Client, GatewayIntentBits, AttachmentBuilder } from "discord.js";
+import { Client, GatewayIntentBits } from "discord.js";
 import dotenv from "dotenv";
 import cron from "node-cron";
 
 dotenv.config();
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -43,11 +46,11 @@ async function createBackup() {
     }
   }
 
-  await sendBackupMessage(backupFile);
+  await sendBackupMessage();
 }
 
 // === WIADOMOŚĆ NA DISCORD ===
-async function sendBackupMessage(backupPath) {
+async function sendBackupMessage() {
   if (!client.isReady()) return;
   for (const [_, guild] of client.guilds.cache) {
     const chat = guild.channels.cache.find(c => c.name === "guild-czat");
@@ -56,21 +59,13 @@ async function sendBackupMessage(backupPath) {
 }
 
 // === PRZYWRACANIE BACKUPU PRZY STARCIU ===
-async function restoreBackup() {
-  if (fs.existsSync(DATA_FILE)) {
-    const content = fs.readFileSync(DATA_FILE, "utf8").trim();
-    if (content && content !== "{}") {
-      console.log("[RESTORE] Plik data.json istnieje, pomijam przywracanie.");
-      return;
-    }
-  }
-
+export async function restoreLatestBackup() {
   const files = fs.readdirSync(BACKUP_DIR)
     .filter(f => f.startsWith("data_backup_"))
     .sort((a, b) => fs.statSync(path.join(BACKUP_DIR, b)).mtime - fs.statSync(path.join(BACKUP_DIR, a)).mtime);
 
   if (!files.length) {
-    console.log("[RESTORE] Brak dostępnych backupów.");
+    console.log("[RESTORE] Brak dostępnych backupów do przywrócenia.");
     return;
   }
 
@@ -98,14 +93,14 @@ async function guildVaultReminder() {
 cron.schedule("0 */12 * * *", createBackup);
 
 // Guild Vault – niedziela i poniedziałek o 09:00 i 21:00
-cron.schedule("0 9 * * 0,1", guildVaultReminder);   // 9:00
-cron.schedule("0 21 * * 0,1", guildVaultReminder);  // 21:00
+cron.schedule("0 9 * * 0,1", guildVaultReminder);
+cron.schedule("0 21 * * 0,1", guildVaultReminder);
 
 // === START ===
 client.once("ready", async () => {
-  console.log("[BOT] Połączono z Discordem, przywracam backup i uruchamiam automatyczne zadania...");
-  await restoreBackup();
-  await createBackup();
+  console.log("[BOT] Połączono z Discordem — przywracam backup i uruchamiam zadania...");
+  await restoreLatestBackup(); // zawsze przywraca ostatni backup
+  await createBackup(); // od razu po starcie też robi nowy
 });
 
 client.login(process.env.TOKEN);
