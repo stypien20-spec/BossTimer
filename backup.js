@@ -72,7 +72,7 @@ async function sendBackupMessage(backupPath) {
 
     for (const [_, guild] of client.guilds.cache) {
       const logsChannel = guild.channels.cache.find(ch => ch.name === 'logs');
-      const infoChannel = guild.channels.cache.find(ch => ch.name === 'guild-chat');
+      const infoChannel = guild.channels.cache.find(ch => ch.name === 'guild-czat');
       const attachment = new AttachmentBuilder(backupPath);
 
       if (logsChannel) {
