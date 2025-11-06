@@ -26,16 +26,18 @@ if (!fs.existsSync(BACKUP_DIR)) {
   console.log('[BACKUP] Utworzono folder backups/');
 }
 
+console.log('[BACKUP] System automatycznych backupów został uruchomiony ✅');
+
 // === FUNKCJA TWORZĄCA BACKUP ===
 async function createBackup() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupFile = path.join(BACKUP_DIR, `data_backup_${timestamp}.json`);
 
   try {
-    // Sprawdź, czy data.json istnieje
+    // 🔒 Upewnij się, że plik data.json istnieje
     if (!fs.existsSync(DATA_FILE)) {
-      console.error(`[BACKUP ERROR] Plik ${DATA_FILE} nie istnieje — pomijam backup.`);
-      return;
+      console.warn(`[BACKUP WARNING] Plik ${DATA_FILE} nie istnieje — tworzę pusty plik.`);
+      fs.writeFileSync(DATA_FILE, '{}');
     }
 
     // Skopiuj data.json do backups
@@ -73,7 +75,6 @@ async function sendBackupMessage(backupPath) {
       const infoChannel = guild.channels.cache.find(ch => ch.name === 'guild-chat');
       const attachment = new AttachmentBuilder(backupPath);
 
-      // Kanał logs — tylko plik
       if (logsChannel) {
         await logsChannel.send({
           content: '💾 Nowy backup data.json',
@@ -81,9 +82,8 @@ async function sendBackupMessage(backupPath) {
         });
       }
 
-      // Kanał guild-chat — tylko komunikat
       if (infoChannel) {
-        await infoChannel.send('💾 Backup został wykonany pomyślnie ✅');
+        await infoChannel.send('💾 Backup został wykonany pomyślnie');
       }
     }
 
@@ -99,7 +99,7 @@ cron.schedule('0 */12 * * *', () => {
 });
 
 // === Pierwszy backup po starcie ===
-client.once('clientReady', () => {
+client.once('ready', () => {
   console.log('[BOT] Połączono, uruchamiam automatyczne backupy...');
   createBackup();
 });
