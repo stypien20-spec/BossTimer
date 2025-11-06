@@ -13,59 +13,99 @@ const BACKUP_DIR = path.join(__dirname, "backups");
 const DATA_FILE = path.join(__dirname, "data.json");
 const MAX_BACKUPS = 2;
 
-// --- Utwórz folder backups ---
-if (!fs.existsSync(BACKUP_DIR)) {
-  fs.mkdirSync(BACKUP_DIR);
-  console.log("[BACKUP] Utworzono folder backups/");
-}
+if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR);
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 
-// === FUNKCJA TWORZĄCA BACKUP ===
+// === FUNKCJA BACKUP ===
 async function createBackup() {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupFile = path.join(BACKUP_DIR, `data_backup_${timestamp}.json`);
 
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      console.warn(`[BACKUP WARNING] Brak pliku ${DATA_FILE}, tworzę pusty.`);
-      fs.writeFileSync(DATA_FILE, "{}");
-    }
-
-    fs.copyFileSync(DATA_FILE, backupFile);
-    console.log(`[BACKUP] Utworzono kopię: ${backupFile}`);
-
-    const files = fs
-      .readdirSync(BACKUP_DIR)
-      .filter(f => f.startsWith("data_backup_"))
-      .sort((a, b) => fs.statSync(path.join(BACKUP_DIR, b)).mtime - fs.statSync(path.join(BACKUP_DIR, a)).mtime);
-
-    if (files.length > MAX_BACKUPS) {
-      for (const f of files.slice(MAX_BACKUPS)) {
-        fs.unlinkSync(path.join(BACKUP_DIR, f));
-        console.log(`[BACKUP] Usunięto starą kopię: ${f}`);
-      }
-    }
-
-    await sendBackupMessage(backupFile);
-  } catch (err) {
-    console.error("[BACKUP ERROR]", err);
+  if (!fs.existsSync(DATA_FILE)) {
+    console.warn(`[BACKUP] Brak pliku ${DATA_FILE}, pomijam tworzenie kopii.`);
+    return;
   }
+
+  fs.copyFileSync(DATA_FILE, backupFile);
+  console.log(`[BACKUP] Utworzono kopię: ${backupFile}`);
+
+  const files = fs.readdirSync(BACKUP_DIR)
+    .filter(f => f.startsWith("data_backup_"))
+    .sort((a, b) => fs.statSync(path.join(BACKUP_DIR, b)).mtime - fs.statSync(path.join(BACKUP_DIR, a)).mtime);
+
+  if (files.length > MAX_BACKUPS) {
+    for (const f of files.slice(MAX_BACKUPS)) {
+      fs.unlinkSync(path.join(BACKUP_DIR, f));
+      console.log(`[BACKUP] Usunięto starą kopię: ${f}`);
+    }
+  }
+
+  await sendBackupMessage(backupFile);
 }
 
-// === WYSYŁANIE WIADOMOŚCI NA DISCORD ===
+// === WIADOMOŚĆ NA DISCORD ===
 async function sendBackupMessage(backupPath) {
   if (!client.isReady()) return;
   for (const [_, guild] of client.guilds.cache) {
-    const logs = guild.channels.cache.find(c => c.name === "logs");
     const chat = guild.channels.cache.find(c => c.name === "guild-czat");
-    const attachment = new AttachmentBuilder(backupPath);
-
-    if (logs) await logs.send({ content: "💾 Nowy backup data.json", files: [attachment] });
     if (chat) await chat.send("💾 Backup został wykonany pomyślnie");
   }
 }
 
-// === AUTOMATYCZNE PRZYWRACANIE BACKUPU PO REDEPLOYU
+// === PRZYWRACANIE BACKUPU PRZY STARCIU ===
+async function restoreBackup() {
+  if (fs.existsSync(DATA_FILE)) {
+    const content = fs.readFileSync(DATA_FILE, "utf8").trim();
+    if (content && content !== "{}") {
+      console.log("[RESTORE] Plik data.json istnieje, pomijam przywracanie.");
+      return;
+    }
+  }
+
+  const files = fs.readdirSync(BACKUP_DIR)
+    .filter(f => f.startsWith("data_backup_"))
+    .sort((a, b) => fs.statSync(path.join(BACKUP_DIR, b)).mtime - fs.statSync(path.join(BACKUP_DIR, a)).mtime);
+
+  if (!files.length) {
+    console.log("[RESTORE] Brak dostępnych backupów.");
+    return;
+  }
+
+  const latest = path.join(BACKUP_DIR, files[0]);
+  fs.copyFileSync(latest, DATA_FILE);
+  console.log(`[RESTORE] Przywrócono dane z: ${files[0]}`);
+}
+
+// === PRZYPOMNIENIE O GUILD VALUT ===
+async function guildVaultReminder() {
+  if (!client.isReady()) return;
+  for (const [_, guild] of client.guilds.cache) {
+    const vaultChannel = guild.channels.cache.find(c => c.name === "skarbowka-piergow");
+    if (vaultChannel) {
+      await vaultChannel.send("💰 **Proszę o wpłacenie zen na Guild Valut !**");
+      console.log("[REMINDER] Wysłano przypomnienie o Guild Valut.");
+    } else {
+      console.warn(`[REMINDER] Nie znaleziono kanału #skarbowka-piergow w ${guild.name}`);
+    }
+  }
+}
+
+// === CRONY ===
+// Backup co 12 godzin
+cron.schedule("0 */12 * * *", createBackup);
+
+// Guild Vault – niedziela i poniedziałek o 09:00 i 21:00
+cron.schedule("0 9 * * 0,1", guildVaultReminder);   // 9:00
+cron.schedule("0 21 * * 0,1", guildVaultReminder);  // 21:00
+
+// === START ===
+client.once("ready", async () => {
+  console.log("[BOT] Połączono z Discordem, przywracam backup i uruchamiam automatyczne zadania...");
+  await restoreBackup();
+  await createBackup();
+});
+
+client.login(process.env.TOKEN);
