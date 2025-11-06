@@ -1,178 +1,195 @@
-// ✅ BossTimer & Event Reminder Bot (finalna wersja by ChatGPT 2025)
 import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
 import dotenv from "dotenv";
 import express from "express";
+import fs from "fs";
 
 dotenv.config();
 
-// 🟢 Express serwer (utrzymanie przy życiu na Koyeb)
 const app = express();
 const PORT = process.env.PORT || 8000;
-app.get("/", (req, res) => res.send("✅ BossTimer & Event Bot działa!"));
+app.get("/", (req, res) => res.send("✅ BossTimer is running!"));
 app.listen(PORT, () => console.log(`🌐 Serwer Express uruchomiony na porcie ${PORT}`));
 
-// ⚙️ Discord Client
+// Konfiguracja
+const BOSS_CHANNEL = "resp-boss";
+const EVENT_CHANNEL = "eventy";
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-const BOSS_CHANNEL = "resp-boss";
-const EVENT_CHANNEL = "eventy";
+// Ładowanie danych
+let data = { bosses: [], events: {} };
+const DATA_FILE = "./data.json";
+if (fs.existsSync(DATA_FILE)) {
+  data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+}
 
-let bosses = [];
-let events = {}; // { "Rabbit Invasion": ["15:23", "20:23"] }
+// 🔹 Funkcje pomocnicze
+const saveData = () => fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 
-// 🕒 Pomocnicze
-const parseTime = (str) => {
-  const [h, m] = str.split(":").map(Number);
-  const now = new Date();
-  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
-  if (date < now) date.setDate(date.getDate() + 1);
-  return date;
+const parseTime = (input) => {
+  const match = input.match(/\+((\d+)h)?((\d+)m)?/);
+  if (!match) return null;
+  const hours = parseInt(match[2] || 0);
+  const minutes = parseInt(match[4] || 0);
+  return (hours * 60 + minutes) * 60000;
 };
-const formatTime = (date) => date.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", hour12: false });
 
-// 🧹 Czyszczenie bossów co minutę
-setInterval(() => {
-  const now = Date.now();
-  bosses = bosses.filter((b) => b.time > now);
-}, 60 * 1000);
+const formatTime = (date) => {
+  const h = date.getHours().toString().padStart(2, "0");
+  const m = date.getMinutes().toString().padStart(2, "0");
+  return `${h}:${m}`;
+};
 
-// 🔔 Przypomnienia eventów
-setInterval(() => {
-  const now = new Date();
-  const h = now.getHours().toString().padStart(2, "0");
-  const m = now.getMinutes().toString().padStart(2, "0");
+// 🔸 Boss Embedy
+const bossEmbed = (boss) =>
+  new EmbedBuilder()
+    .setTitle(`💀 ${boss.name}`)
+    .setDescription(`📍 **${boss.location}**\n⏰ Respawn: **${formatTime(boss.respawn)}**`)
+    .setColor(0xff5555)
+    .setFooter({ text: `Dodano przez ${boss.author}` });
 
-  for (const [name, times] of Object.entries(events)) {
-    for (const t of times) {
-      const [eh, em] = t.split(":").map(Number);
-      const eventTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em, 0);
-      const diff = (eventTime - now) / 60000;
+// 🔸 Event Embedy
+const eventEmbed = (eventName, times) =>
+  new EmbedBuilder()
+    .setTitle(`🎉 ${eventName}`)
+    .setDescription(times.map((t) => `🕒 ${t}`).join("\n"))
+    .setColor(0x55ff55)
+    .setFooter({ text: "Cykliczne eventy MU Online" });
 
-      if (Math.abs(diff - 15) < 0.5) {
-        const embed = new EmbedBuilder()
-          .setTitle("🕒 EVENT ZA 15 MINUT!")
-          .setDescription(`🌿 **${name}** o **${t}**`)
-          .setColor("Green")
-          .setTimestamp();
+// 🔹 START BOTA
+client.once("clientReady", () => {
+  console.log(`✅ Zalogowano jako ${client.user.tag}`);
+  setInterval(checkBosses, 60 * 1000);
+  setInterval(checkEvents, 60 * 1000);
+});
 
-        const channel = client.channels.cache.find((ch) => ch.name === EVENT_CHANNEL);
-        if (channel) channel.send({ embeds: [embed] });
-      }
-    }
-  }
-}, 60 * 1000);
-
-// 💬 Obsługa komend
+// 🔹 Obsługa wiadomości
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
-  const args = msg.content.split(" ");
-  const cmd = args.shift().toLowerCase();
 
-  // ------------------- 🧨 BOSSY -------------------
-  if (msg.channel.name === BOSS_CHANNEL) {
+  const channelName = msg.channel.name;
+  const [cmd, ...args] = msg.content.split(" ");
+
+  // =====================
+  // 💀 KOMENDY DLA BOSSÓW
+  // =====================
+  if (channelName === BOSS_CHANNEL) {
     if (cmd === "!boss") {
-      const name = args[0];
-      const timeStr = args[1];
-      if (!name || !timeStr) return msg.reply("❌ Użycie: `!boss <nazwa> <+minuty>`");
+      const [name, location, timeArg] = args;
+      if (!name || !location || !timeArg)
+        return msg.reply("❌ Użycie: `!boss <nazwa> <lokacja> +czas` np. `!boss Kundun5 Kalima +2h10m`");
 
-      const match = timeStr.match(/^\+(\d+)m$/);
-      if (!match) return msg.reply("❌ Podaj czas w formacie `+Xm` np. `+15m`");
-      const minutes = parseInt(match[1]);
-      const time = Date.now() + minutes * 60000;
+      const duration = parseTime(timeArg);
+      if (!duration) return msg.reply("❌ Podaj czas w formacie `+Xm`, `+Xh`, lub `+XhYm`.");
 
-      bosses.push({ name, time });
-      const embed = new EmbedBuilder()
-        .setTitle("🔥 Dodano Bossa!")
-        .setDescription(`**${name}** pojawi się za **${minutes}m** (${formatTime(new Date(time))})`)
-        .setColor("Red")
-        .setTimestamp();
-      msg.channel.send({ embeds: [embed] });
+      const respawn = new Date(Date.now() + duration);
+      const boss = { name, location, respawn, author: msg.author.username };
+      data.bosses.push(boss);
+      saveData();
 
-      setTimeout(() => {
-        const embed2 = new EmbedBuilder()
-          .setTitle("⚔️ BOSS WSTAŁ!")
-          .setDescription(`**${name}** właśnie się pojawił!`)
-          .setColor("Orange");
-        msg.channel.send({ embeds: [embed2] });
-      }, minutes * 60000);
+      await msg.channel.send({ embeds: [bossEmbed(boss)] });
+    }
 
-      if (minutes > 15) {
-        setTimeout(() => {
-          const embed3 = new EmbedBuilder()
-            .setTitle("⏳ Przypomnienie!")
-            .setDescription(`**${name}** pojawi się za 15 minut!`)
-            .setColor("Yellow");
-          msg.channel.send({ embeds: [embed3] });
-        }, (minutes - 15) * 60000);
-      }
+    if (cmd === "!timer") {
+      if (!data.bosses.length) return msg.reply("⏳ Brak aktywnych bossów.");
+      const embeds = data.bosses.map(bossEmbed);
+      for (const e of embeds) await msg.channel.send({ embeds: [e] });
+    }
+
+    if (cmd === "!timerclean") {
+      data.bosses = data.bosses.filter((b) => b.respawn > Date.now());
+      saveData();
+      msg.reply("🧹 Usunięto nieaktywne bossy!");
     }
 
     if (cmd === "!delboss") {
       const name = args[0];
-      bosses = bosses.filter((b) => b.name.toLowerCase() !== name.toLowerCase());
-      msg.reply(`🗑️ Boss **${name}** usunięty.`);
-    }
-
-    if (cmd === "!timer") {
-      if (bosses.length === 0) return msg.reply("Brak aktywnych bossów.");
-      const lines = bosses.map((b) => {
-        const diff = Math.max(0, Math.floor((b.time - Date.now()) / 60000));
-        return `🔥 **${b.name}** – za ${diff}m (${formatTime(new Date(b.time))})`;
-      });
-      const embed = new EmbedBuilder().setTitle("🕒 Aktywne Bossy").setDescription(lines.join("\n")).setColor("Red");
-      msg.channel.send({ embeds: [embed] });
-    }
-
-    if (cmd === "!timerclean") {
-      const before = bosses.length;
-      bosses = bosses.filter((b) => b.time > Date.now());
-      const removed = before - bosses.length;
-      msg.reply(`🧹 Usunięto ${removed} zakończonych bossów.`);
+      if (!name) return msg.reply("❌ Podaj nazwę bossa do usunięcia.");
+      data.bosses = data.bosses.filter((b) => b.name.toLowerCase() !== name.toLowerCase());
+      saveData();
+      msg.reply(`🗑️ Usunięto bossa **${name}**.`);
     }
   }
 
-  // ------------------- 🌿 EVENTY -------------------
-  if (msg.channel.name === EVENT_CHANNEL) {
+  // =====================
+  // 🎉 KOMENDY DLA EVENTÓW
+  // =====================
+  if (channelName === EVENT_CHANNEL) {
     if (cmd === "!event") {
-      const name = args.slice(0, -1).join(" ");
-      const timeStr = args[args.length - 1];
-      if (!name || !timeStr) return msg.reply("❌ Użycie: `!event <nazwa> <HH:MM>`");
+      const [name, time] = [args[0], args[1]];
+      if (!name || !time) return msg.reply("❌ Użycie: `!event <nazwa> HH;MM`");
 
-      if (!events[name]) events[name] = [];
-      if (!events[name].includes(timeStr)) events[name].push(timeStr);
+      if (!data.events[name]) data.events[name] = [];
+      if (!data.events[name].includes(time)) data.events[name].push(time);
+      saveData();
 
-      const embed = new EmbedBuilder()
-        .setTitle("🌿 Dodano Event")
-        .setDescription(`**${name}** o godzinie **${timeStr}**`)
-        .setColor("Green")
-        .setTimestamp();
-      msg.channel.send({ embeds: [embed] });
+      await msg.channel.send({ embeds: [eventEmbed(name, data.events[name])] });
     }
 
     if (cmd === "!delevent") {
-      const name = args.slice(0, -1).join(" ");
-      const timeStr = args[args.length - 1];
-      if (events[name]) {
-        events[name] = events[name].filter((t) => t !== timeStr);
-        if (events[name].length === 0) delete events[name];
-        msg.reply(`🗑️ Usunięto godzinę **${timeStr}** dla eventu **${name}**.`);
-      } else msg.reply("❌ Nie znaleziono takiego eventu.");
+      const [name, time] = [args[0], args[1]];
+      if (!name || !time) return msg.reply("❌ Użycie: `!delevent <nazwa> HH;MM`");
+      if (data.events[name]) {
+        data.events[name] = data.events[name].filter((t) => t !== time);
+        if (data.events[name].length === 0) delete data.events[name];
+        saveData();
+        msg.reply(`🗑️ Usunięto godzinę **${time}** dla eventu **${name}**.`);
+      }
     }
 
-    if (cmd === "!listevent") {
-      if (Object.keys(events).length === 0) return msg.reply("❌ Brak zapisanych eventów.");
-      const lines = Object.entries(events).map(([n, t]) => `🌿 **${n}** → ${t.join(", ")}`);
-      const embed = new EmbedBuilder().setTitle("📅 Zaplanowane Eventy").setDescription(lines.join("\n")).setColor("Green");
-      msg.channel.send({ embeds: [embed] });
+    if (cmd === "!events") {
+      if (Object.keys(data.events).length === 0) return msg.reply("📭 Brak zapisanych eventów.");
+      for (const [name, times] of Object.entries(data.events)) {
+        await msg.channel.send({ embeds: [eventEmbed(name, times)] });
+      }
     }
   }
 });
 
-// 🚀 Start
-client.once("clientReady", () => {
-  console.log(`✅ Zalogowano jako ${client.user.tag}`);
-});
+// 🔁 Sprawdzanie bossów
+async function checkBosses() {
+  const now = Date.now();
+  const guild = client.guilds.cache.first();
+  if (!guild) return;
 
+  const channel = guild.channels.cache.find((ch) => ch.name === BOSS_CHANNEL);
+  if (!channel) return;
+
+  for (const boss of [...data.bosses]) {
+    const timeLeft = boss.respawn - now;
+    if (timeLeft <= 0) {
+      await channel.send(`⚔️ **${boss.name}** (${boss.location}) właśnie się pojawił!`);
+      data.bosses = data.bosses.filter((b) => b !== boss);
+      saveData();
+    } else if (Math.abs(timeLeft - 15 * 60000) < 60000) {
+      await channel.send(`⏰ **${boss.name}** pojawi się za 15 minut (${boss.location})!`);
+    }
+  }
+}
+
+// 🔁 Sprawdzanie eventów
+async function checkEvents() {
+  const now = new Date();
+  const current = `${now.getHours().toString().padStart(2, "0")};${now.getMinutes().toString().padStart(2, "0")}`;
+  const reminder = `${now.getHours().toString().padStart(2, "0")};${(now.getMinutes() + 15)
+    .toString()
+    .padStart(2, "0")}`;
+
+  const guild = client.guilds.cache.first();
+  if (!guild) return;
+
+  const channel = guild.channels.cache.find((ch) => ch.name === EVENT_CHANNEL);
+  if (!channel) return;
+
+  for (const [name, times] of Object.entries(data.events)) {
+    for (const t of times) {
+      if (t === reminder) await channel.send(`🔔 Za **15 minut** event **${name}**!`);
+      if (t === current) await channel.send(`🎉 Event **${name}** właśnie się rozpoczął!`);
+    }
+  }
+}
+
+// 🔐 Logowanie
 client.login(process.env.TOKEN);
